@@ -84,8 +84,16 @@ func (f *fakeEtcd) putLocked(key, val string) *mvccpb.KeyValue {
 	var prev *mvccpb.KeyValue
 	kv := &mvccpb.KeyValue{Key: []byte(key), Value: []byte(val), ModRevision: f.rev}
 	if old, ok := f.store[key]; ok {
-		cp := *old
-		prev = &cp
+		// A protobuf message must not be copied by value: mvccpb.KeyValue embeds
+		// protoimpl.MessageState, which contains a sync.Mutex, and go vet says so.
+		prev = &mvccpb.KeyValue{
+			Key:            old.Key,
+			Value:          old.Value,
+			CreateRevision: old.CreateRevision,
+			ModRevision:    old.ModRevision,
+			Version:        old.Version,
+			Lease:          old.Lease,
+		}
 		kv.CreateRevision = old.CreateRevision
 		kv.Version = old.Version + 1
 	} else {
@@ -115,9 +123,14 @@ func (f *fakeEtcd) Get(ctx context.Context, key string, opts ...clientv3.OpOptio
 	}
 	if op.IsKeysOnly() {
 		for i := range matched {
-			cp := *matched[i]
-			cp.Value = nil
-			matched[i] = &cp
+			// Same reason: build a fresh message rather than copying one.
+			matched[i] = &mvccpb.KeyValue{
+				Key:            matched[i].Key,
+				CreateRevision: matched[i].CreateRevision,
+				ModRevision:    matched[i].ModRevision,
+				Version:        matched[i].Version,
+				Lease:          matched[i].Lease,
+			}
 		}
 	}
 	resp.Kvs = matched
@@ -251,7 +264,10 @@ func (t *fakeTxn) Commit() (*clientv3.TxnResponse, error) {
 
 // evalCmpLocked evaluates one comparison against the store.
 func (f *fakeEtcd) evalCmpLocked(c clientv3.Cmp) bool {
-	pc := pb.Compare(c)
+	// clientv3.Cmp stopped being `type Cmp pb.Compare` in v3.7.0, so the old
+	// conversion no longer compiles. GetCompare is the accessor it replaced it
+	// with.
+	pc := c.GetCompare()
 	kv := f.store[string(pc.Key)]
 	switch pc.Target {
 	case pb.Compare_VALUE:
@@ -370,7 +386,7 @@ func (f *fakeEtcd) Watch(ctx context.Context, key string, opts ...clientv3.OpOpt
 	f.mu.Lock()
 	f.watchers = append(f.watchers, w)
 	if f.watchErr {
-		w.ch <- clientv3.WatchResponse{Header: *f.header(), Canceled: true}
+		w.ch <- clientv3.WatchResponse{Header: f.header(), Canceled: true}
 	}
 	f.mu.Unlock()
 	go func() {
@@ -394,7 +410,7 @@ func (f *fakeEtcd) notifyLocked(t mvccpb.Event_EventType, kv, prev *mvccpb.KeyVa
 	for _, w := range f.watchers {
 		if w.matches(string(kv.Key)) {
 			w.ch <- clientv3.WatchResponse{
-				Header: *f.header(),
+				Header: f.header(),
 				Events: []*clientv3.Event{(*clientv3.Event)(ev)},
 			}
 		}

@@ -86,7 +86,7 @@ func (c *Client) WatchBlock(ctx context.Context, fn func([]Event), key string, o
 // toWatchResult maps a clientv3 WatchResponse to WatchResult.
 func toWatchResult(wr clientv3.WatchResponse) WatchResult {
 	r := WatchResult{
-		Header:          toHeader(&wr.Header),
+		Header:          toHeader(wr.Header),
 		Canceled:        wr.Canceled,
 		Created:         wr.Created,
 		CompactRevision: wr.CompactRevision,
