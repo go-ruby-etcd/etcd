@@ -56,9 +56,25 @@ func (c *Client) Watch(ctx context.Context, key string, opts ...OpOption) <-chan
 	out := make(chan WatchResult)
 	go func() {
 		defer close(out)
-		for wr := range wch {
+		for {
+			// ⛔ BOTH receives need the ctx.Done case, not just the send.
+			// With only the inner one, a goroutine parked on the transport
+			// channel cannot see a cancelled context, so out never closes and
+			// `for range c.Watch(ctx, ...)` -- WatchBlock's own loop -- waits
+			// forever. clientv3 does close its channel on cancellation, which
+			// is why this never cost anything in production; the transport
+			// here is an interface, and its method set promises nothing of
+			// the sort.
 			select {
-			case out <- toWatchResult(wr):
+			case wr, ok := <-wch:
+				if !ok {
+					return
+				}
+				select {
+				case out <- toWatchResult(wr):
+				case <-ctx.Done():
+					return
+				}
 			case <-ctx.Done():
 				return
 			}
