@@ -683,3 +683,38 @@ func TestMaintenanceErrors(t *testing.T) {
 		t.Fatal("status error")
 	}
 }
+
+// TestWatchStopsWhenTheContextEndsWithNoResponse pins down the thing
+// TestWatchContextCancelDuringSend can only reach by luck: the forwarding
+// goroutine's OUTER receive, `for wr := range wch`, has no ctx.Done case, so
+// once it is parked there a cancelled context is invisible to it. Nothing
+// closes out, and a caller doing `for range c.Watch(ctx, ...)` -- which is
+// exactly what WatchBlock does -- waits for a channel that will never close.
+//
+// This is deterministic where the other test is a coin flip. No response is
+// ever delivered, so the goroutine is parked on the transport channel from the
+// start, and cancelling must still bring it home.
+//
+// Against the real clientv3 the channel IS closed when the context is
+// cancelled, which is why this never cost anything in production. But
+// `transport` is a seam this package defines, and its method set does not say
+// so anywhere; a goroutine whose only way out is a promise its own interface
+// never makes is one refactor away from hanging.
+func TestWatchStopsWhenTheContextEndsWithNoResponse(t *testing.T) {
+	wch := make(chan clientv3.WatchResponse) // never written to, never closed
+	c := newWithTransport(watchStub{fakeEtcd: newFake(), ch: wch})
+	ctx, cancel := context.WithCancel(context.Background())
+	out := c.Watch(ctx, "k")
+
+	cancel()
+
+	select {
+	case _, ok := <-out:
+		if ok {
+			t.Fatal("no response was ever delivered, so out must close rather than yield")
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("Watch's goroutine never returned after its context was cancelled: " +
+			"it is parked on the transport channel, and nothing here closes that")
+	}
+}
