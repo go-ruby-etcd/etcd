@@ -3,7 +3,7 @@ module github.com/go-ruby-etcd/etcd
 go 1.26.4
 
 require (
-	go.etcd.io/etcd/api/v3 v3.7.1
+	go.etcd.io/etcd/api/v3 v3.7.2
 	go.etcd.io/etcd/client/v3 v3.7.1
 	google.golang.org/grpc v1.83.2
 )
